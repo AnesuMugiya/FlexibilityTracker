@@ -19,3 +19,5 @@ class PoseAnalyser:
         if angle > 180.0:
             angle = 360 - angle
         return angle
+    
+    

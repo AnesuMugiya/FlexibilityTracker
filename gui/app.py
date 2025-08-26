@@ -1,76 +1,230 @@
-"""
-Tkinter (or PyQt) main app class
-"""
-
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, filedialog, messagebox
 import cv2
 from PIL import Image, ImageTk
 
+from core.sources import CameraSource, VideoFileSource, ImageSource
+
 class GUIApp(tk.Tk):
-    def __init__(self, estimator, analyser, session):
+    def __init__(self, estimator, analyzer, session):
         super().__init__()
         self.title("Flexibility Progress Tracker")
-        self.geometry("800x600")
+        self.geometry("900x700")
 
         self.estimator = estimator
-        self.analyser = analyser
+        self.analyzer = analyzer
         self.session = session
 
-        # Video display
-        self.video_label = tk.Label(self)
+        # current source
+        self.source = None
+        
+        # Display dimensions for consistent aspect ratio
+        self.display_width = 640
+        self.display_height = 480
+
+        # Create main container
+        self.main_frame = ttk.Frame(self)
+        self.main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # Show initial selection screen
+        self.show_selection_screen()
+
+    def show_selection_screen(self):
+        # Clear any existing widgets
+        for widget in self.main_frame.winfo_children():
+            widget.destroy()
+
+        # Create selection screen
+        selection_frame = ttk.Frame(self.main_frame)
+        selection_frame.pack(expand=True)
+
+        # Title
+        title_label = ttk.Label(selection_frame, text="Choose Input Source", 
+                               font=("Arial", 16, "bold"))
+        title_label.pack(pady=20)
+
+        # Button frame
+        button_frame = ttk.Frame(selection_frame)
+        button_frame.pack(pady=20)
+
+        # Source selection buttons
+        ttk.Button(button_frame, text="Use Camera", 
+                  command=self.select_camera, width=20).pack(pady=10)
+        ttk.Button(button_frame, text="Open Video File", 
+                  command=self.select_video, width=20).pack(pady=10)
+        ttk.Button(button_frame, text="Open Image File", 
+                  command=self.select_image, width=20).pack(pady=10)
+
+        # Quit button
+        ttk.Button(button_frame, text="Quit", 
+                  command=self.destroy, width=20).pack(pady=20)
+
+    def show_main_interface(self):
+        # Clear selection screen
+        for widget in self.main_frame.winfo_children():
+            widget.destroy()
+
+        # Video display frame with fixed size
+        video_frame = ttk.Frame(self.main_frame)
+        video_frame.pack(pady=10)
+
+        self.video_label = tk.Label(video_frame, bg='black')
         self.video_label.pack()
 
-        # Controls
-        self.button_frame = ttk.Frame(self)
-        self.button_frame.pack(pady=10)
+        # Controls frame
+        controls_frame = ttk.Frame(self.main_frame)
+        controls_frame.pack(pady=10)
 
-        ttk.Button(self.button_frame, text="Save Best Pose", command=self.save_pose).pack(side=tk.LEFT, padx=5)
-        ttk.Button(self.button_frame, text="Quit", command=self.destroy).pack(side=tk.LEFT, padx=5)
+        ttk.Button(controls_frame, text="Back to Selection", 
+                  command=self.back_to_selection).pack(side=tk.LEFT, padx=5)
+        # ttk.Button(controls_frame, text="Use Camera", 
+        #           command=self.use_camera).pack(side=tk.LEFT, padx=5)
+        # ttk.Button(controls_frame, text="Open Video…", 
+        #           command=self.open_video).pack(side=tk.LEFT, padx=5)
+        # ttk.Button(controls_frame, text="Open Image…", 
+        #           command=self.open_image).pack(side=tk.LEFT, padx=5)
+        ttk.Button(controls_frame, text="Save Best", 
+                  command=self.save_best).pack(side=tk.LEFT, padx=5)
+        ttk.Button(controls_frame, text="Quit", 
+                  command=self.destroy).pack(side=tk.LEFT, padx=5)
 
-        # Capture
-        self.cap = cv2.VideoCapture(0)
-        self.update_frame()
+    def resize_frame(self, frame):
+        """Resize frame to maintain aspect ratio within display dimensions"""
+        h, w = frame.shape[:2]
+        
+        # Calculate scaling factor to fit within display dimensions
+        scale_w = self.display_width / w
+        scale_h = self.display_height / h
+        scale = min(scale_w, scale_h)
+        
+        # Calculate new dimensions
+        new_w = int(w * scale)
+        new_h = int(h * scale)
+        
+        # Resize frame
+        resized = cv2.resize(frame, (new_w, new_h))
+        
+        return resized
+
+    def back_to_selection(self):
+        # Release current source
+        if self.source:
+            self.source.release()
+            self.source = None
+        
+        # Reset best value
+        self.session.best_value = None
+        
+        # Show selection screen
+        self.show_selection_screen()
+
+    def select_camera(self):
+        self.session.best_value = None
+        self.set_source(CameraSource(0))
+        self.show_main_interface()
+        self.after(0, self.update_frame)
+
+    def select_video(self):
+        path = filedialog.askopenfilename(
+            filetypes=[("Video files", "*.mp4;*.mov;*.avi;*.mkv"), ("All files", "*.*")]
+        )
+        if not path: 
+            return
+        self.session.best_value = None
+        self.set_source(VideoFileSource(path))
+        self.show_main_interface()
+        self.after(0, self.update_frame)
+
+    def select_image(self):
+        path = filedialog.askopenfilename(
+            filetypes=[("Image files", "*.jpg;*.jpeg;*.png;*.bmp"), ("All files", "*.*")]
+        )
+        if not path: 
+            return
+        self.session.best_value = None
+        self.set_source(ImageSource(path))
+        self.show_main_interface()
+        self.after(0, self.update_frame)
+
+    def set_source(self, src):
+        # release old
+        if self.source:
+            self.source.release()
+        self.source = src
+
+    def use_camera(self):
+        self.session.best_value = None
+        self.set_source(CameraSource(0))
+        self.after(0, self.update_frame)
+
+    def open_video(self):
+        path = filedialog.askopenfilename(
+            filetypes=[("Video files", "*.mp4;*.mov;*.avi;*.mkv"), ("All files", "*.*")]
+        )
+        if not path: return
+        self.session.best_value = None
+        self.set_source(VideoFileSource(path))
+        self.after(0, self.update_frame)
+
+    def open_image(self):
+        path = filedialog.askopenfilename(
+            filetypes=[("Image files", "*.jpg;*.jpeg;*.png;*.bmp"), ("All files", "*.*")]
+        )
+        if not path: return
+        self.session.best_value = None
+        self.set_source(ImageSource(path))
+        self.after(0, self.update_frame)
+
+    def save_best(self):
+        self.session.save_result()
+        messagebox.showinfo("Saved", f"Best value saved: {self.session.best_value}")
 
     def update_frame(self):
-        ret, frame = self.cap.read()
-        if ret:
-            frame, results = self.estimator.process_frame(frame)
+        if self.source is None:
+            return
 
-            # Kept getting errors here for reasons unknown
-            try:
-                # Example: track elbow angle (replace later with split metrics)
-                if results.pose_landmarks:
-                    landmarks = results.pose_landmarks.landmark
-                    # Convert normalized coords to pixel coords
-                    h, w, _ = frame.shape
-                    shoulder = [landmarks[11].x * w, landmarks[11].y * h]
-                    elbow = [landmarks[13].x * w, landmarks[13].y * h]
-                    wrist = [landmarks[15].x * w, landmarks[15].y * h]
+        ret, frame = self.source.read()
+        if not ret or frame is None:
+            # End of video: stop loop (or switch back to camera if you prefer)
+            return
 
-                    angle = self.analyser.calculate_angle(shoulder, elbow, wrist)
-                    self.session.update_best(angle)
+        # Process with MediaPipe
+        frame_bgr, results = self.estimator.process_frame(frame)
 
+        # Example angle: LEFT elbow
+        if results.pose_landmarks:
+            lm = results.pose_landmarks.landmark
+            h, w, _ = frame_bgr.shape
+            LS = self.estimator.mp_pose.PoseLandmark.LEFT_SHOULDER.value
+            LE = self.estimator.mp_pose.PoseLandmark.LEFT_ELBOW.value
+            LW = self.estimator.mp_pose.PoseLandmark.LEFT_WRIST.value
 
-                # Draw angle near the elbow
-                if angle is not None:
-                    cv2.putText(
-                        frame,
-                        f"{angle:.2f}°",
-                        (int(elbow[0]), int(elbow[1])),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2, cv2.LINE_AA
-                    )
-            except:
-                pass
-            # Convert frame for Tkinter
-            img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            img = Image.fromarray(img)
-            imgtk = ImageTk.PhotoImage(image=img)
-            self.video_label.imgtk = imgtk
-            self.video_label.configure(image=imgtk)
+            sh = (lm[LS].x * w, lm[LS].y * h)
+            el = (lm[LE].x * w, lm[LE].y * h)
+            wr = (lm[LW].x * w, lm[LW].y * h)
 
+            angle = self.analyzer.calculate_angle(sh, el, wr)
+            self.session.update_best(angle)
+
+            cv2.putText(frame_bgr, f"{angle:.2f}°",
+                        (int(el[0]), int(el[1])),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2, cv2.LINE_AA)
+
+        # Resize frame to fit display area
+        frame_resized = self.resize_frame(frame_bgr)
+
+        # Convert to RGB and display in Tkinter
+        img = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
+        imgtk = ImageTk.PhotoImage(image=Image.fromarray(img))
+        self.video_label.imgtk = imgtk
+        self.video_label.configure(image=imgtk)
+
+        # Schedule next frame:
+        # - Camera/video: keep looping ~30–60 FPS
+        # - Image: keep refreshing so the window stays responsive
         self.after(10, self.update_frame)
 
-    def save_pose(self):
-        self.session.save_result()
-        print(f"Saved best value: {self.session.best_value}")
+    def destroy(self):
+        if self.source: 
+            self.source.release()
+        super().destroy()

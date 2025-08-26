@@ -12,7 +12,7 @@ class PoseSession:
         self.best_value = None
 
     def update_best(self, new_value):
-        if self.best_value is None or new_value < self.best_value:
+        if self.best_value is None or new_value > self.best_value:
             self.best_value = new_value
 
     def save_result(self, filepath="data/progress.csv"):
