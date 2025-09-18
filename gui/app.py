@@ -1,7 +1,9 @@
+# -*- coding: utf-8 -*-
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import cv2
 from PIL import Image, ImageTk
+from datetime import datetime, timedelta
 
 from core.sources import CameraSource, VideoFileSource, ImageSource
 
@@ -54,6 +56,10 @@ class GUIApp(tk.Tk):
                   command=self.select_video, width=20).pack(pady=10)
         ttk.Button(button_frame, text="Open Image File", 
                   command=self.select_image, width=20).pack(pady=10)
+        
+        # Mode selection
+        ttk.Button(button_frame, text="Test Mode", 
+                  command=self.select_test, width=20).pack(pady=10)
 
         # Quit button
         ttk.Button(button_frame, text="Quit", 
@@ -118,6 +124,10 @@ class GUIApp(tk.Tk):
         # Show selection screen
         self.show_selection_screen()
 
+    def select_test(self):
+        self.session.mode = True
+
+
     def select_camera(self):
         self.session.best_value = None
         self.set_source(CameraSource(0))
@@ -156,6 +166,7 @@ class GUIApp(tk.Tk):
         self.session.best_value = None
         self.set_source(CameraSource(0))
         self.after(0, self.update_frame)
+        
 
     def open_video(self):
         path = filedialog.askopenfilename(
@@ -175,9 +186,27 @@ class GUIApp(tk.Tk):
         self.set_source(ImageSource(path))
         self.after(0, self.update_frame)
 
+    def test_mode(self):
+        if (datetime.now() - self.session.session_start) > timedelta(seconds=30):
+            self.session.save_result()
+            messagebox.showinfo("Saved", f"Best value saved: {self.session.best_value}")
+            messagebox.showinfo("Saved", f"Worst value saved: {self.session.worst_value}")
+            messagebox.showinfo("Jitter", f"Error range is: {self.session.best_value - self.session.worst_value}")
+            messagebox.showinfo("Observed Value", f"Average: {self.session.sum/self.session.count}")
+            self.session.best_value = None
+            self.session.worst_value = None
+            self.session.count = 0
+            self.session.sum = 0
+            self.session.session_start = datetime.now() 
+
+        else:
+            return
+
+
     def save_best(self):
         self.session.save_result()
         messagebox.showinfo("Saved", f"Best value saved: {self.session.best_value}")
+
 
     def update_frame(self):
         if self.source is None:
@@ -195,9 +224,9 @@ class GUIApp(tk.Tk):
         if results.pose_landmarks:
             lm = results.pose_landmarks.landmark
             h, w, _ = frame_bgr.shape
-            LS = self.estimator.mp_pose.PoseLandmark.LEFT_SHOULDER.value
-            LE = self.estimator.mp_pose.PoseLandmark.LEFT_ELBOW.value
-            LW = self.estimator.mp_pose.PoseLandmark.LEFT_WRIST.value
+            LS = self.estimator.mp_pose.PoseLandmark.RIGHT_SHOULDER.value
+            LE = self.estimator.mp_pose.PoseLandmark.RIGHT_ELBOW.value
+            LW = self.estimator.mp_pose.PoseLandmark.RIGHT_WRIST.value
 
             sh = (lm[LS].x * w, lm[LS].y * h)
             el = (lm[LE].x * w, lm[LE].y * h)
@@ -206,9 +235,9 @@ class GUIApp(tk.Tk):
             angle = self.analyzer.calculate_angle(sh, el, wr)
             self.session.update_best(angle)
 
-            cv2.putText(frame_bgr, f"{angle:.2f}°",
+            cv2.putText(frame_bgr, f"{angle:.2f} {chr(176)}",
                         (int(el[0]), int(el[1])),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2, cv2.LINE_AA)
+                        cv2.FONT_HERSHEY_SIMPLEX, 2.5, (255,255,255), 2, cv2.LINE_AA)
 
         # Resize frame to fit display area
         frame_resized = self.resize_frame(frame_bgr)
@@ -219,9 +248,13 @@ class GUIApp(tk.Tk):
         self.video_label.imgtk = imgtk
         self.video_label.configure(image=imgtk)
 
+        if self.session.mode == True:
+            self.test_mode()
+            
         # Schedule next frame:
         # - Camera/video: keep looping ~30–60 FPS
         # - Image: keep refreshing so the window stays responsive
+        
         self.after(10, self.update_frame)
 
     def destroy(self):
