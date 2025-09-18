@@ -6,6 +6,7 @@ from PIL import Image, ImageTk
 from datetime import datetime, timedelta
 
 from core.sources import CameraSource, VideoFileSource, ImageSource
+from core.filters import OneEuro
 
 class GUIApp(tk.Tk):
     def __init__(self, estimator, analyzer, session):
@@ -16,6 +17,7 @@ class GUIApp(tk.Tk):
         self.estimator = estimator
         self.analyzer = analyzer
         self.session = session
+        self.angle_filter = OneEuro(freq=30, min_cutoff=2.0 , beta=0.01, d_cutoff=1.0)
 
         # current source
         self.source = None
@@ -189,10 +191,15 @@ class GUIApp(tk.Tk):
     def test_mode(self):
         if (datetime.now() - self.session.session_start) > timedelta(seconds=30):
             self.session.save_result()
-            messagebox.showinfo("Saved", f"Best value saved: {self.session.best_value}")
-            messagebox.showinfo("Saved", f"Worst value saved: {self.session.worst_value}")
-            messagebox.showinfo("Jitter", f"Error range is: {self.session.best_value - self.session.worst_value}")
-            messagebox.showinfo("Observed Value", f"Average: {self.session.sum/self.session.count}")
+            msg = (
+            f"Best value: {self.session.best_value:.2f}\n"
+            f"Worst value: {self.session.worst_value:.2f}\n"
+            f"Error range (Jitter): {(self.session.best_value - self.session.worst_value):.2f}\n"
+            f"Observed Average: {(self.session.sum/self.session.count):.2f}"
+            )
+
+            messagebox.showinfo("Session Summary", msg)
+
             self.session.best_value = None
             self.session.worst_value = None
             self.session.count = 0
@@ -232,10 +239,12 @@ class GUIApp(tk.Tk):
             el = (lm[LE].x * w, lm[LE].y * h)
             wr = (lm[LW].x * w, lm[LW].y * h)
 
-            angle = self.analyzer.calculate_angle(sh, el, wr)
-            self.session.update_best(angle)
+            raw_angle = self.analyzer.calculate_angle(sh, el, wr)
+            smoothed_angle = self.angle_filter(raw_angle)
 
-            cv2.putText(frame_bgr, f"{angle:.2f} {chr(176)}",
+            self.session.update_best(smoothed_angle)
+
+            cv2.putText(frame_bgr, f"{smoothed_angle:.2f} {chr(176)}",
                         (int(el[0]), int(el[1])),
                         cv2.FONT_HERSHEY_SIMPLEX, 2.5, (255,255,255), 2, cv2.LINE_AA)
 
