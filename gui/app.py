@@ -4,20 +4,48 @@ from tkinter import ttk, filedialog, messagebox
 import cv2
 from PIL import Image, ImageTk
 from datetime import datetime, timedelta
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import matplotlib.pyplot as plt
 
 from core.sources import CameraSource, VideoFileSource, ImageSource
-from core.filters import OneEuro
+from filters.oneEuro import OneEuro
+from filters.kalman2D import Kalman2D
 
 class GUIApp(tk.Tk):
     def __init__(self, estimator, analyzer, session):
         super().__init__()
         self.title("Flexibility Progress Tracker")
-        self.geometry("900x700")
+        self.geometry("1100x800")
+        self.configure(bg='#f7f5f3')  # Warm off-white background
+        
+        # Colour palette
+        self.colors = {
+            'primary': '#7a9b76',      # Sage green
+            'secondary': '#a8bfa8',    # Light sage
+            'accent': '#e8ddd4',       # Warm beige
+            'background': '#f7f5f3',   # Off-white
+            'surface': '#ffffff',      # Pure white
+            'text_primary': '#2d3436', # Dark grey
+            'text_secondary': '#636e72', # Medium grey
+            'success': '#6c7b7f',      # Muted teal
+            'warning': '#fab1a0'       # Soft coral
+        }
+        
+        # Configure modern ttk style
+        self.setup_styles()
 
         self.estimator = estimator
         self.analyzer = analyzer
         self.session = session
-        self.angle_filter = OneEuro(freq=30, min_cutoff=2.0 , beta=0.01, d_cutoff=1.0)
+        self.angle_filter = OneEuro(freq=30)
+        self.kf_wrist = Kalman2D(dt=1/30)
+        self.kf_initialized = False
+
+        # Always initialize lists for plotting
+        self.timestamps = []
+        self.raw_angles = []
+        self.filtered_angles = []
 
         # current source
         self.source = None
@@ -26,75 +54,241 @@ class GUIApp(tk.Tk):
         self.display_width = 640
         self.display_height = 480
 
-        # Create main container
-        self.main_frame = ttk.Frame(self)
-        self.main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        # Create main container with padding and modern styling
+        self.main_frame = ttk.Frame(self, style='Main.TFrame')
+        self.main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
 
         # Show initial selection screen
         self.show_selection_screen()
 
+    def setup_styles(self):
+        """Configure modern ttk styles with earthy colors"""
+        style = ttk.Style()
+        style.theme_use('clam')
+        
+        # Configure main frame
+        style.configure('Main.TFrame', background=self.colors['background'])
+        
+        # Modern card-like frames
+        style.configure('Card.TFrame', 
+                       background=self.colors['surface'],
+                       relief='flat',
+                       borderwidth=1)
+        
+        # Selection screen styling
+        style.configure('Selection.TFrame',
+                       background=self.colors['surface'],
+                       relief='flat',
+                       borderwidth=0)
+        
+        # Modern buttons with hover effects
+        style.configure('Primary.TButton',
+                       background=self.colors['primary'],
+                       foreground='white',
+                       borderwidth=0,
+                       focuscolor='none',
+                       font=('Segoe UI', 11),
+                       padding=(20, 12))
+        
+        style.map('Primary.TButton',
+                 background=[('active', self.colors['secondary']),
+                            ('pressed', '#6b8a67')])
+        
+        style.configure('Secondary.TButton',
+                       background=self.colors['accent'],
+                       foreground=self.colors['text_primary'],
+                       borderwidth=0,
+                       focuscolor='none',
+                       font=('Segoe UI', 10),
+                       padding=(16, 10))
+        
+        style.map('Secondary.TButton',
+                 background=[('active', '#ddd2c7'),
+                            ('pressed', '#d4c9bc')])
+        
+        # Title labels
+        style.configure('Title.TLabel',
+                       background=self.colors['surface'],
+                       foreground=self.colors['text_primary'],
+                       font=('Segoe UI', 24, 'bold'))
+        
+        style.configure('Subtitle.TLabel',
+                       background=self.colors['surface'],
+                       foreground=self.colors['text_secondary'],
+                       font=('Segoe UI', 12))
+        
+        style.configure('Header.TLabel',
+                       background=self.colors['background'],
+                       foreground=self.colors['text_primary'],
+                       font=('Segoe UI', 16, 'bold'))
+
     def show_selection_screen(self):
+        """Modern welcome screen with card-based layout"""
         # Clear any existing widgets
         for widget in self.main_frame.winfo_children():
             widget.destroy()
 
-        # Create selection screen
-        selection_frame = ttk.Frame(self.main_frame)
-        selection_frame.pack(expand=True)
+        # Center container
+        center_frame = ttk.Frame(self.main_frame, style='Main.TFrame')
+        center_frame.place(relx=0.5, rely=0.5, anchor='center')
 
-        # Title
-        title_label = ttk.Label(selection_frame, text="Choose Input Source", 
-                               font=("Arial", 16, "bold"))
-        title_label.pack(pady=20)
+        # Welcome card
+        card_frame = ttk.Frame(center_frame, style='Card.TFrame', padding=40)
+        card_frame.pack()
 
-        # Button frame
-        button_frame = ttk.Frame(selection_frame)
-        button_frame.pack(pady=20)
+        # App icon/title section
+        title_section = ttk.Frame(card_frame, style='Selection.TFrame')
+        title_section.pack(pady=(0, 30))
 
-        # Source selection buttons
-        ttk.Button(button_frame, text="Use Camera", 
-                  command=self.select_camera, width=20).pack(pady=10)
-        ttk.Button(button_frame, text="Open Video File", 
-                  command=self.select_video, width=20).pack(pady=10)
-        ttk.Button(button_frame, text="Open Image File", 
-                  command=self.select_image, width=20).pack(pady=10)
+        # Main title
+        title_label = ttk.Label(title_section, text="Flexibility Progress Tracker", 
+                               style='Title.TLabel')
+        title_label.pack()
+
+        # Subtitle
+        subtitle_label = ttk.Label(title_section, 
+                                  text="Track your progress and improve your flexibility", 
+                                  style='Subtitle.TLabel')
+        subtitle_label.pack(pady=(8, 0))
+
+        # Buttons section
+        buttons_frame = ttk.Frame(card_frame, style='Selection.TFrame')
+        buttons_frame.pack()
+
+        # Input source buttons with icons
+        input_frame = ttk.Frame(buttons_frame, style='Selection.TFrame')
+        input_frame.pack(pady=(0, 20))
+
+        ttk.Label(input_frame, text="Choose Input Source", 
+                 font=('Segoe UI', 14, 'bold'),
+                 background=self.colors['surface'],
+                 foreground=self.colors['text_primary']).pack(pady=(0, 15))
+
+        # Source buttons in a grid
+        source_grid = ttk.Frame(input_frame, style='Selection.TFrame')
+        source_grid.pack()
+
+        ttk.Button(source_grid, text="📹 Live Camera", 
+                  command=self.select_camera, 
+                  style='Primary.TButton',
+                  width=18).grid(row=0, column=0, padx=8, pady=5)
         
-        # Mode selection
-        ttk.Button(button_frame, text="Test Mode", 
-                  command=self.select_test, width=20).pack(pady=10)
+        ttk.Button(source_grid, text="🎬 Video File", 
+                  command=self.select_video, 
+                  style='Primary.TButton',
+                  width=18).grid(row=0, column=1, padx=8, pady=5)
+        
+        ttk.Button(source_grid, text="🖼️ Image File", 
+                  command=self.select_image, 
+                  style='Primary.TButton',
+                  width=18).grid(row=1, column=0, padx=8, pady=5)
+        
+        ttk.Button(source_grid, text="🧪 Test Mode", 
+                  command=self.select_test, 
+                  style='Primary.TButton',
+                  width=18).grid(row=1, column=1, padx=8, pady=5)
 
-        # Quit button
-        ttk.Button(button_frame, text="Quit", 
-                  command=self.destroy, width=20).pack(pady=20)
+        # Separator
+        separator = ttk.Frame(buttons_frame, style='Selection.TFrame', height=1)
+        separator.pack(fill='x', pady=20)
+
+        # Exit button
+        ttk.Button(buttons_frame, text="Exit Application", 
+                  command=self.destroy, 
+                  style='Secondary.TButton',
+                  width=25).pack()
 
     def show_main_interface(self):
+        """Modern main interface with improved layout"""
         # Clear selection screen
         for widget in self.main_frame.winfo_children():
             widget.destroy()
 
-        # Video display frame with fixed size
-        video_frame = ttk.Frame(self.main_frame)
-        video_frame.pack(pady=10)
+        # Header
+        header_frame = ttk.Frame(self.main_frame, style='Main.TFrame')
+        header_frame.pack(fill='x', pady=(0, 20))
 
-        self.video_label = tk.Label(video_frame, bg='black')
-        self.video_label.pack()
+        ttk.Label(header_frame, text="Flexibility Analysis", 
+                 style='Header.TLabel').pack(side='left')
 
-        # Controls frame
-        controls_frame = ttk.Frame(self.main_frame)
-        controls_frame.pack(pady=10)
+        # Main content area
+        content_frame = ttk.Frame(self.main_frame, style='Main.TFrame')
+        content_frame.pack(fill=tk.BOTH, expand=True)
 
-        ttk.Button(controls_frame, text="Back to Selection", 
-                  command=self.back_to_selection).pack(side=tk.LEFT, padx=5)
-        # ttk.Button(controls_frame, text="Use Camera", 
-        #           command=self.use_camera).pack(side=tk.LEFT, padx=5)
-        # ttk.Button(controls_frame, text="Open Video…", 
-        #           command=self.open_video).pack(side=tk.LEFT, padx=5)
-        # ttk.Button(controls_frame, text="Open Image…", 
-        #           command=self.open_image).pack(side=tk.LEFT, padx=5)
-        ttk.Button(controls_frame, text="Save Best", 
-                  command=self.save_best).pack(side=tk.LEFT, padx=5)
-        ttk.Button(controls_frame, text="Quit", 
-                  command=self.destroy).pack(side=tk.LEFT, padx=5)
+        # Video section (left side)
+        video_section = ttk.Frame(content_frame, style='Card.TFrame', padding=20)
+        video_section.pack(side=tk.LEFT, fill='both', expand=True, padx=(0, 10))
+
+        ttk.Label(video_section, text="Live Feed", 
+                 font=('Segoe UI', 12, 'bold'),
+                 background=self.colors['surface'],
+                 foreground=self.colors['text_primary']).pack(pady=(0, 10))
+
+        # Video display with modern border
+        video_container = tk.Frame(video_section, 
+                                  bg=self.colors['surface'], 
+                                  highlightbackground=self.colors['accent'],
+                                  highlightthickness=2)
+        video_container.pack(pady=(0, 10))
+
+        self.video_label = tk.Label(video_container, 
+                                   bg='#1a1a1a',  # Dark background for video
+                                   highlightbackground=self.colors['accent'],
+                                   highlightthickness=1)
+        self.video_label.pack(padx=2, pady=2)
+
+        # Plot section (right side - only in test mode)
+        if self.session.mode == True:
+            plot_section = ttk.Frame(content_frame, style='Card.TFrame', padding=20)
+            plot_section.pack(side=tk.RIGHT, fill='both', expand=True)
+
+            ttk.Label(plot_section, text="Angle Analysis", 
+                     font=('Segoe UI', 12, 'bold'),
+                     background=self.colors['surface'],
+                     foreground=self.colors['text_primary']).pack(pady=(0, 10))
+
+            # Configure matplotlib with colors
+            plt.style.use('default')
+            self.fig = Figure(figsize=(6, 4), dpi=100, facecolor=self.colors['surface'])
+            self.ax = self.fig.add_subplot(111)
+            self.ax.set_facecolor('#fafafa')
+            self.ax.grid(True, alpha=0.3, color=self.colors['text_secondary'])
+            self.ax.spines['top'].set_visible(False)
+            self.ax.spines['right'].set_visible(False)
+            self.ax.spines['left'].set_color(self.colors['text_secondary'])
+            self.ax.spines['bottom'].set_color(self.colors['text_secondary'])
+            
+            self.ax.set_title("Angle over Time", fontsize=12, color=self.colors['text_primary'], pad=20)
+            self.ax.set_xlabel("Time (s)", color=self.colors['text_secondary'])
+            self.ax.set_ylabel("Angle (degrees)", color=self.colors['text_secondary'])
+
+            self.canvas = FigureCanvasTkAgg(self.fig, master=plot_section)
+            plot_widget = self.canvas.get_tk_widget()
+            plot_widget.configure(bg=self.colors['surface'])
+            plot_widget.pack(fill=tk.BOTH, expand=True)
+
+        # Controls section at bottom
+        controls_section = ttk.Frame(self.main_frame, style='Card.TFrame', padding=15)
+        controls_section.pack(fill='x', pady=(20, 0))
+
+        # Control buttons
+        controls_left = ttk.Frame(controls_section, style='Card.TFrame')
+        controls_left.pack(side='left')
+
+        controls_right = ttk.Frame(controls_section, style='Card.TFrame')
+        controls_right.pack(side='right')
+
+        ttk.Button(controls_left, text="← Back to Sources", 
+                  command=self.back_to_selection,
+                  style='Secondary.TButton').pack(side=tk.LEFT, padx=(0, 10))
+
+        ttk.Button(controls_right, text="💾 Save Best Result", 
+                  command=self.save_best,
+                  style='Primary.TButton').pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(controls_right, text="Exit", 
+                  command=self.destroy,
+                  style='Secondary.TButton').pack(side=tk.LEFT, padx=(10, 0))
 
     def resize_frame(self, frame):
         """Resize frame to maintain aspect ratio within display dimensions"""
@@ -128,7 +322,10 @@ class GUIApp(tk.Tk):
 
     def select_test(self):
         self.session.mode = True
-
+        # Reset test-mode data
+        self.timestamps = []
+        self.raw_angles = []
+        self.filtered_angles = []
 
     def select_camera(self):
         self.session.best_value = None
@@ -138,6 +335,7 @@ class GUIApp(tk.Tk):
 
     def select_video(self):
         path = filedialog.askopenfilename(
+            title="Select Video File",
             filetypes=[("Video files", "*.mp4;*.mov;*.avi;*.mkv"), ("All files", "*.*")]
         )
         if not path: 
@@ -149,6 +347,7 @@ class GUIApp(tk.Tk):
 
     def select_image(self):
         path = filedialog.askopenfilename(
+            title="Select Image File",
             filetypes=[("Image files", "*.jpg;*.jpeg;*.png;*.bmp"), ("All files", "*.*")]
         )
         if not path: 
@@ -164,12 +363,14 @@ class GUIApp(tk.Tk):
             self.source.release()
         self.source = src
 
+        self.kf_wrist = Kalman2D(dt=1/30)  # Reset filter for new source
+        self.kf_initialized = False
+
     def use_camera(self):
         self.session.best_value = None
         self.set_source(CameraSource(0))
         self.after(0, self.update_frame)
         
-
     def open_video(self):
         path = filedialog.askopenfilename(
             filetypes=[("Video files", "*.mp4;*.mov;*.avi;*.mkv"), ("All files", "*.*")]
@@ -192,13 +393,13 @@ class GUIApp(tk.Tk):
         if (datetime.now() - self.session.session_start) > timedelta(seconds=30):
             self.session.save_result()
             msg = (
-            f"Best value: {self.session.best_value:.2f}\n"
-            f"Worst value: {self.session.worst_value:.2f}\n"
-            f"Error range (Jitter): {(self.session.best_value - self.session.worst_value):.2f}\n"
-            f"Observed Average: {(self.session.sum/self.session.count):.2f}"
+            f"Best value: {self.session.best_value:.2f}°\n"
+            f"Worst value: {self.session.worst_value:.2f}°\n"
+            f"Error range (Jitter): {(self.session.best_value - self.session.worst_value):.2f}°\n"
+            f"Observed Average: {(self.session.sum/self.session.count):.2f}°"
             )
 
-            messagebox.showinfo("Session Summary", msg)
+            messagebox.showinfo("Session Complete", msg)
 
             self.session.best_value = None
             self.session.worst_value = None
@@ -206,14 +407,17 @@ class GUIApp(tk.Tk):
             self.session.sum = 0
             self.session.session_start = datetime.now() 
 
+            # Reset test-mode data
+            self.timestamps = []
+            self.raw_angles = []
+            self.filtered_angles = []
+
         else:
             return
 
-
     def save_best(self):
         self.session.save_result()
-        messagebox.showinfo("Saved", f"Best value saved: {self.session.best_value}")
-
+        messagebox.showinfo("✅ Saved Successfully", f"Best flexibility value saved: {self.session.best_value:.2f}°")
 
     def update_frame(self):
         if self.source is None:
@@ -231,22 +435,75 @@ class GUIApp(tk.Tk):
         if results.pose_landmarks:
             lm = results.pose_landmarks.landmark
             h, w, _ = frame_bgr.shape
-            LS = self.estimator.mp_pose.PoseLandmark.RIGHT_SHOULDER.value
-            LE = self.estimator.mp_pose.PoseLandmark.RIGHT_ELBOW.value
-            LW = self.estimator.mp_pose.PoseLandmark.RIGHT_WRIST.value
+            LS = self.estimator.mp_pose.PoseLandmark.LEFT_SHOULDER.value
+            LE = self.estimator.mp_pose.PoseLandmark.LEFT_ELBOW.value
+            LW = self.estimator.mp_pose.PoseLandmark.LEFT_WRIST.value
 
             sh = (lm[LS].x * w, lm[LS].y * h)
             el = (lm[LE].x * w, lm[LE].y * h)
             wr = (lm[LW].x * w, lm[LW].y * h)
+
+            # Confidence score
+            conf = lm[LW].visibility
+
+            # Kalman filter predict
+            if not self.kf_initialized and conf > 0.7:
+                self.kf_wrist.x[:2] = [[wr[0]], [wr[1]]]  # Set initial position
+                self.kf_initialized = True
+                pred_x, pred_y = wr[0], wr[1]  # Use actual position for first frame
+            else:
+                pred_x, pred_y = self.kf_wrist.predict()
+            
+
+            if conf > 0.7:   # if wrist is visible enough
+                filt_x, filt_y = self.kf_wrist.update([wr[0], wr[1]])
+            else:            # occlusion → use prediction
+                filt_x, filt_y = pred_x, pred_y
+
+            # Replace wrist with filtered coords
+            wr = (filt_x, filt_y)
 
             raw_angle = self.analyzer.calculate_angle(sh, el, wr)
             smoothed_angle = self.angle_filter(raw_angle)
 
             self.session.update_best(smoothed_angle)
 
-            cv2.putText(frame_bgr, f"{smoothed_angle:.2f} {chr(176)}",
-                        (int(el[0]), int(el[1])),
-                        cv2.FONT_HERSHEY_SIMPLEX, 2.5, (255,255,255), 2, cv2.LINE_AA)
+            # Modern angle display with better styling
+            cv2.putText(frame_bgr, f"{smoothed_angle:.1f}",
+                        (int(el[0]), int(el[1]) - 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3, cv2.LINE_AA)
+            cv2.putText(frame_bgr, f"{smoothed_angle:.1f}",
+                        (int(el[0]), int(el[1]) - 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (122, 155, 118), 2, cv2.LINE_AA)  # Sage green
+
+        # Test mode: record and update graph
+        if self.session.mode == True:
+            t = (datetime.now() - self.session.session_start).total_seconds()
+            self.timestamps.append(t)
+            self.raw_angles.append(raw_angle)
+            self.filtered_angles.append(smoothed_angle)
+
+            if len(self.timestamps) % 10 == 0:  # refresh plot every 10 frames for better performance
+                self.ax.clear()
+                self.ax.set_facecolor('#fafafa')
+                self.ax.grid(True, alpha=0.3, color=self.colors['text_secondary'])
+                self.ax.spines['top'].set_visible(False)
+                self.ax.spines['right'].set_visible(False)
+                self.ax.spines['left'].set_color(self.colors['text_secondary'])
+                self.ax.spines['bottom'].set_color(self.colors['text_secondary'])
+                
+                self.ax.set_title("Angle over Time", fontsize=12, color=self.colors['text_primary'], pad=15)
+                self.ax.set_xlabel("Time (s)", color=self.colors['text_secondary'])
+                self.ax.set_ylabel("Angle (degrees)", color=self.colors['text_secondary'])
+                
+                # Plot
+                self.ax.plot(self.timestamps, self.raw_angles, 
+                           label="Raw", alpha=0.4, color="#69411F", linewidth=2)
+                self.ax.plot(self.timestamps, self.filtered_angles, 
+                           label="Filtered", color=self.colors['primary'], linewidth=2)
+                
+                self.ax.legend(frameon=False, loc='upper right')
+                self.canvas.draw()
 
         # Resize frame to fit display area
         frame_resized = self.resize_frame(frame_bgr)
