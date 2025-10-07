@@ -37,6 +37,7 @@ class GUIApp(tk.Tk):
 
         self.estimator = estimator
         self.analyzer = analyzer
+        # self.available_poses = analyzer.get_available_poses()
         self.session = session
         self.angle_filter = OneEuro(freq=30)
         self.kf_wrist = Kalman2D(dt=1/30)
@@ -121,6 +122,12 @@ class GUIApp(tk.Tk):
                        background=self.colors['background'],
                        foreground=self.colors['text_primary'],
                        font=('Segoe UI', 16, 'bold'))
+        
+        # Radio button styling
+        style.configure('Primary.TRadiobutton',
+                    background=self.colors['surface'],
+                    foreground=self.colors['text_primary'],
+                    font=('Segoe UI', 11))
 
     def show_selection_screen(self):
         """Modern welcome screen with card-based layout"""
@@ -150,6 +157,41 @@ class GUIApp(tk.Tk):
                                   text="Track your progress and improve your flexibility", 
                                   style='Subtitle.TLabel')
         subtitle_label.pack(pady=(8, 0))
+
+
+
+        # === NEW: POSE SELECTION SECTION ===
+        pose_section = ttk.Frame(card_frame, style='Selection.TFrame')
+        pose_section.pack(pady=(0, 25))
+
+        ttk.Label(pose_section, text="Select Pose to Track", 
+                font=('Segoe UI', 14, 'bold'),
+                background=self.colors['surface'],
+                foreground=self.colors['text_primary']).pack(pady=(0, 15))
+
+        # Pose selection dropdown
+        self.selected_pose = tk.StringVar(value='front_split')
+        
+        pose_options = {
+            'front_split': 'Front Split',
+            'forward_fold': 'Forward Fold'
+        }
+        
+        pose_frame = ttk.Frame(pose_section, style='Selection.TFrame')
+        pose_frame.pack()
+        
+        for pose_key, pose_label in pose_options.items():
+            ttk.Radiobutton(
+                pose_frame,
+                text=pose_label,
+                variable=self.selected_pose,
+                value=pose_key,
+                style='Primary.TRadiobutton'
+            ).pack(pady=5)
+
+        # separator = ttk.Frame(card_frame, style='Selection.TFrame', height=2)
+        # separator.pack(fill='x', pady=20)
+
 
         # Buttons section
         buttons_frame = ttk.Frame(card_frame, style='Selection.TFrame')
@@ -208,9 +250,19 @@ class GUIApp(tk.Tk):
         header_frame = ttk.Frame(self.main_frame, style='Main.TFrame')
         header_frame.pack(fill='x', pady=(0, 20))
 
-        ttk.Label(header_frame, text="Flexibility Analysis", 
-                 style='Header.TLabel').pack(side='left')
+        ttk.Label(header_frame, text=f"Analyzing: {self.analyzer.get_pose_name()}", 
+                style='Header.TLabel').pack(side='left')
+        
+        # Add pose indicator badge
+        pose_badge = ttk.Label(header_frame, 
+                            text=f"Metric: {self.analyzer.get_metric_unit()}", 
+                            font=('Segoe UI', 10),
+                            background=self.colors['accent'],
+                            foreground=self.colors['text_primary'],
+                            padding=(10, 5))
+        pose_badge.pack(side='left', padx=20)
 
+        
         # Main content area
         content_frame = ttk.Frame(self.main_frame, style='Main.TFrame')
         content_frame.pack(fill=tk.BOTH, expand=True)
@@ -328,6 +380,11 @@ class GUIApp(tk.Tk):
         self.filtered_angles = []
 
     def select_camera(self):
+
+        # Set the selected pose in analyzer
+        self.analyzer.set_pose(self.selected_pose.get())
+        self.session.pose_name = self.analyzer.get_pose_name()
+
         self.session.best_value = None
         self.set_source(CameraSource(0))
         self.show_main_interface()
@@ -340,6 +397,12 @@ class GUIApp(tk.Tk):
         )
         if not path: 
             return
+        
+        # Set the selected pose
+        self.analyzer.set_pose(self.selected_pose.get())
+        self.session.pose_name = self.analyzer.get_pose_name()
+
+
         self.session.best_value = None
         self.set_source(VideoFileSource(path))
         self.show_main_interface()
@@ -352,6 +415,11 @@ class GUIApp(tk.Tk):
         )
         if not path: 
             return
+        
+        # Set the selected pose
+        self.analyzer.set_pose(self.selected_pose.get())
+        self.session.pose_name = self.analyzer.get_pose_name()
+
         self.session.best_value = None
         self.set_source(ImageSource(path))
         self.show_main_interface()
@@ -431,84 +499,80 @@ class GUIApp(tk.Tk):
         # Process with MediaPipe
         frame_bgr, results = self.estimator.process_frame(frame)
 
-        # Example angle: LEFT elbow
+        # === NEW: Use MultiPoseAnalyzer ===
         if results.pose_landmarks:
             lm = results.pose_landmarks.landmark
             h, w, _ = frame_bgr.shape
-            LS = self.estimator.mp_pose.PoseLandmark.LEFT_SHOULDER.value
-            LE = self.estimator.mp_pose.PoseLandmark.LEFT_ELBOW.value
-            LW = self.estimator.mp_pose.PoseLandmark.LEFT_WRIST.value
-
-            sh = (lm[LS].x * w, lm[LS].y * h)
-            el = (lm[LE].x * w, lm[LE].y * h)
-            wr = (lm[LW].x * w, lm[LW].y * h)
-
-            # Confidence score
-            conf = lm[LW].visibility
-
-            # Kalman filter predict
-            if not self.kf_initialized and conf > 0.7:
-                self.kf_wrist.x[:2] = [[wr[0]], [wr[1]]]  # Set initial position
-                self.kf_initialized = True
-                pred_x, pred_y = wr[0], wr[1]  # Use actual position for first frame
-            else:
-                pred_x, pred_y = self.kf_wrist.predict()
             
-
-            if conf > 0.7:   # if wrist is visible enough
-                filt_x, filt_y = self.kf_wrist.update([wr[0], wr[1]])
-            else:            # occlusion → use prediction
-                filt_x, filt_y = pred_x, pred_y
-
-            # Replace wrist with filtered coords
-            wr = (filt_x, filt_y)
-
-            raw_angle = self.analyzer.calculate_angle(sh, el, wr)
-            smoothed_angle = self.angle_filter(raw_angle)
-
-            self.session.update_best(smoothed_angle)
-
-            # Modern angle display with better styling
-            cv2.putText(frame_bgr, f"{smoothed_angle:.1f}",
-                        (int(el[0]), int(el[1]) - 20),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3, cv2.LINE_AA)
-            cv2.putText(frame_bgr, f"{smoothed_angle:.1f}",
-                        (int(el[0]), int(el[1]) - 20),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (122, 155, 118), 2, cv2.LINE_AA)  # Sage green
-
-        # Test mode: record and update graph
-        if self.session.mode == True:
-            t = (datetime.now() - self.session.session_start).total_seconds()
-            self.timestamps.append(t)
-            self.raw_angles.append(raw_angle)
-            self.filtered_angles.append(smoothed_angle)
-
-            if len(self.timestamps) % 10 == 0:  # refresh plot every 10 frames for better performance
-                self.ax.clear()
-                self.ax.set_facecolor('#fafafa')
-                self.ax.grid(True, alpha=0.3, color=self.colors['text_secondary'])
-                self.ax.spines['top'].set_visible(False)
-                self.ax.spines['right'].set_visible(False)
-                self.ax.spines['left'].set_color(self.colors['text_secondary'])
-                self.ax.spines['bottom'].set_color(self.colors['text_secondary'])
+            # Analyze the selected pose
+            pose_results = self.analyzer.analyze(lm, w, h, frame_bgr)
+            
+            # Get the primary metric (automatically switches based on pose type)
+            if pose_results['confidence'] > 0.5:  # Only track if confident
+                raw_metric = pose_results['primary_metric']
+                smoothed_metric = self.angle_filter(raw_metric)
                 
-                self.ax.set_title("Angle over Time", fontsize=12, color=self.colors['text_primary'], pad=15)
-                self.ax.set_xlabel("Time (s)", color=self.colors['text_secondary'])
-                self.ax.set_ylabel("Angle (degrees)", color=self.colors['text_secondary'])
+                # Update session with smoothed value
+                self.session.update_best(smoothed_metric)
                 
-                # Plot
-                self.ax.plot(self.timestamps, self.raw_angles, 
-                           label="Raw", alpha=0.4, color="#69411F", linewidth=2)
-                self.ax.plot(self.timestamps, self.filtered_angles, 
-                           label="Filtered", color=self.colors['primary'], linewidth=2)
+                # Display metric on screen
+                metric_text = f"{smoothed_metric:.1f}{self.analyzer.get_metric_unit()}"
                 
-                self.ax.legend(frameon=False, loc='upper right')
-                self.canvas.draw()
+                # Find a good position based on pose type
+                if self.analyzer.current_pose == 'front_split':
+                    # Display near hips
+                    hip_x = int((lm[23].x + lm[24].x) / 2 * w)
+                    hip_y = int((lm[23].y + lm[24].y) / 2 * h)
+                    pos = (hip_x, hip_y - 40)
+                else:  # forward_fold or other
+                    # Display near center top
+                    pos = (int(w / 2) - 100, 50)
+                
+                cv2.putText(frame_bgr, metric_text, pos,
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 255, 255), 4, cv2.LINE_AA)
+                cv2.putText(frame_bgr, metric_text, pos,
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.5, (122, 155, 118), 2, cv2.LINE_AA)
+                
+                # Display form feedback if available
+                if pose_results.get('feedback'):
+                    y_offset = 150
+                    for feedback in pose_results['feedback']:
+                        cv2.putText(frame_bgr, feedback, (10, y_offset),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
+                        cv2.putText(frame_bgr, feedback, (10, y_offset),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 150, 0), 1, cv2.LINE_AA)
+                        y_offset += 30
+                
+                # Test mode plotting (if enabled)
+                if self.session.mode == True:
+                    t = (datetime.now() - self.session.session_start).total_seconds()
+                    self.timestamps.append(t)
+                    self.raw_angles.append(raw_metric)
+                    self.filtered_angles.append(smoothed_metric)
 
-        # Resize frame to fit display area
+                    if len(self.timestamps) % 10 == 0:
+                        self.ax.clear()
+                        self.ax.set_facecolor('#fafafa')
+                        self.ax.grid(True, alpha=0.3, color=self.colors['text_secondary'])
+                        self.ax.spines['top'].set_visible(False)
+                        self.ax.spines['right'].set_visible(False)
+                        
+                        title = f"{self.analyzer.get_pose_name()} over Time"
+                        self.ax.set_title(title, fontsize=12, color=self.colors['text_primary'])
+                        self.ax.set_xlabel("Time (s)", color=self.colors['text_secondary'])
+                        self.ax.set_ylabel(f"Metric ({self.analyzer.get_metric_unit()})", 
+                                        color=self.colors['text_secondary'])
+                        
+                        self.ax.plot(self.timestamps, self.raw_angles, 
+                                label="Raw", alpha=0.4, color="#69411F", linewidth=2)
+                        self.ax.plot(self.timestamps, self.filtered_angles, 
+                                label="Filtered", color=self.colors['primary'], linewidth=2)
+                        
+                        self.ax.legend(frameon=False, loc='upper right')
+                        self.canvas.draw()
+
+        # Resize and display frame
         frame_resized = self.resize_frame(frame_bgr)
-
-        # Convert to RGB and display in Tkinter
         img = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
         imgtk = ImageTk.PhotoImage(image=Image.fromarray(img))
         self.video_label.imgtk = imgtk
@@ -517,11 +581,8 @@ class GUIApp(tk.Tk):
         if self.session.mode == True:
             self.test_mode()
             
-        # Schedule next frame:
-        # - Camera/video: keep looping ~30–60 FPS
-        # - Image: keep refreshing so the window stays responsive
-        
         self.after(10, self.update_frame)
+
 
     def destroy(self):
         if self.source: 

@@ -1,27 +1,4 @@
 """
-Calculates joint angles, distances, pose metrics.
-"""
-
-
-# import numpy as np
-
-# class PoseAnalyser:
-
-#     # Angle calculator
-#     @staticmethod
-#     def calculate_angle(a, b, c):
-#         a = np.array(a) # First
-#         b = np.array(b) # Mid
-#         c = np.array(c) # End
-
-#         radians = np.arctan2(c[1]-b[1], c[0]-b[0]) - np.arctan2(a[1]-b[1], a[0]-b[0])
-#         angle = np.abs(radians*180.0/np.pi)
-#         if angle > 180.0:
-#             angle = 360 - angle
-#         return angle
-    
-
-"""
 Multi-pose analysis system that can measure different flexibility poses
 Extensible framework for adding new pose types
 """
@@ -274,7 +251,7 @@ class ForwardFoldAnalyzer(PoseAnalyzer):
             results['feedback'].append("Reach closer to floor")
         
         if draw_frame is not None:
-            self._draw_annotations(frame, shoulder_center, hip_center, 
+            self._draw_annotations(draw_frame, shoulder_center, hip_center, 
                                  knee_center, wrist_center, floor_level, results)
         
         return results
