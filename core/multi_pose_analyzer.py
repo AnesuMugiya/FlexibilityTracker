@@ -144,7 +144,7 @@ class FrontSplitAnalyzer(PoseAnalyzer):
         
         return results
     
-    def _auto_calibrate(self, landmarks, image_height, assumed_height_cm=170):
+    def _auto_calibrate(self, landmarks, image_height, assumed_height_cm=135):
         """Auto-calibrate using person's height"""
         nose_y = landmarks[0].y * image_height
         left_ankle_y = landmarks[27].y * image_height

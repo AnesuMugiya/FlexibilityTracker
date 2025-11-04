@@ -458,7 +458,7 @@ class GUIApp(tk.Tk):
         self.after(0, self.update_frame)
 
     def test_mode(self):
-        if (datetime.now() - self.session.session_start) > timedelta(seconds=30):
+        if (datetime.now() - self.session.session_start) > timedelta(seconds=60):
             self.session.save_result()
             msg = (
             f"Best value: {self.session.best_value:.2f}°\n"
@@ -581,7 +581,7 @@ class GUIApp(tk.Tk):
         if self.session.mode == True:
             self.test_mode()
             
-        self.after(10, self.update_frame)
+        self.after(1, self.update_frame)
 
 
     def destroy(self):
